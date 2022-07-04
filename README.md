@@ -1,2 +1,3 @@
-# go-relational-database
-Accessing MySQL using Go Example
+# Accessing MySQL using Go Example
+
+[jpllosa.blogspot.com](https://jpllosa.blogspot.com/)
