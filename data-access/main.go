@@ -1,44 +1,56 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"io/ioutil"
 	"log"
 
 	"github.com/go-sql-driver/mysql"
 )
 
+type Album struct {
+	ID     int64
+	Title  string
+	Artist string
+	Price  float32
+}
+
 var db *sql.DB
 
 func main() {
-	// Capture connection properties.
-	// c:\> set DBUSER=golang cmd promt
-	// $ export DBUSER=golang linux/mac
-	// $env:DBUSER = "golang"
+	cfg := mysql.NewConfig()
+	cfg.User = "golang"
+	cfg.Passwd = "golang"
+	cfg.Net = "tcp"
+	cfg.Addr = "localhost:3306"
+	cfg.DBName = "recordings"
 
-	cfg := mysql.Config{
-		// 	User:   os.Getenv("DBUSER"),
-		// 	Passwd: os.Getenv("DBPASS"),
-		User:   "golang",
-		Passwd: "golang",
-		Net:    "tcp",
-		// Addr:                 "127.0.0.1:3306",
-		Addr:                 "localhost:3306",
-		DBName:               "recordings",
-		AllowNativePasswords: true, // if not included, mysql native password authentication error is generated
+	rootCertPool := x509.NewCertPool()
+	pem, err := ioutil.ReadFile("../pems/my-ca.pem")
+	if err != nil {
+		log.Fatalf("configuration: reading CA pem file: %v", err)
 	}
-	// cfg := mysql.NewConfig()
-	// cfg.User = os.Getenv("DBUSER")
-	// cfg.Passwd = os.Getenv("DBPASS")
-	// cfg.User = "golang"
-	// cfg.Passwd = "golang"
-	// cfg.Net = "tcp"
-	// cfg.Addr = "127.0.0.1:3306" // works on mysql-5.7.33, workbench from host localhost, https://dba.stackexchange.com/questions/38803/mysql-error-1045-28000-access-denied-for-user
-	// cfg.Addr = "localhost:3306" // works on mysql-5.6.43, workbench from host localhost
-	// cfg.DBName = "recordings"
-	// Get a database handle.
-	var err error
-	db, err = sql.Open("mysql", cfg.FormatDSN())
+	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+		log.Fatalf("configuration: failed to append pem file: %v", err)
+	}
+	clientCert := make([]tls.Certificate, 0, 1)
+	certs, err := tls.LoadX509KeyPair("../pems/my-client-cert.pem", "../pems/my-client-key.pem")
+	if err != nil {
+		log.Fatalf("configuration: failed to load key pair: %v", err)
+	}
+	clientCert = append(clientCert, certs)
+	mysql.RegisterTLSConfig("secure", &tls.Config{
+		RootCAs:      rootCertPool,
+		Certificates: clientCert,
+		MinVersion:   tls.VersionTLS10, //without this defaults tls1.3 which not supported by our mysql
+		MaxVersion:   tls.VersionTLS11,
+	})
+	cfg.TLSConfig = "secure"
+
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -47,5 +59,22 @@ func main() {
 	if pingErr != nil {
 		log.Fatal(pingErr)
 	}
-	fmt.Println("Connected!")
+	fmt.Println("Securely connected!")
+
+	rows, err := db.Query("SELECT * FROM album")
+	if err != nil {
+		fmt.Errorf("database query: %v", err)
+	}
+	defer rows.Close()
+
+	fmt.Printf("%2s %15s %15s %6s \n", "ID", "Title", "Artist", "Price")
+	for rows.Next() {
+		var alb Album
+		err := rows.Scan(&alb.ID, &alb.Title, &alb.Artist, &alb.Price)
+		if err != nil {
+			fmt.Errorf("row scan: %v", err)
+		} else {
+			fmt.Printf("%2d %15s %15s %6.2f \n", alb.ID, alb.Title, alb.Artist, alb.Price)
+		}
+	}
 }
